@@ -13,35 +13,82 @@ type RESPdata struct {
 	dataType    string
 }
 
-type commandFn func([]RESPdata) string
+func (data RESPdata) toRESPString() string {
+	var sb strings.Builder
+	if strings.Contains(data.dataType, "$") {
+		sb.WriteString("+")
+	} else {
+		sb.WriteString(data.dataType)
+		sb.WriteString("\r\n")
+	}
+	sb.WriteString(data.dataContent)
+	sb.WriteString("\r\n")
+	return sb.String()
+}
+
+type commandFn func(any) (string, error)
 
 var knownCommand map[string]commandFn = map[string]commandFn{
-	"hello": func(args []RESPdata) string {
-		return "Hello, world!"
+	"hello": func(args any) (string, error) {
+		return "Hello, world!", nil
 	},
-	"echo": func(args []RESPdata) string {
+	"echo": func(args any) (string, error) {
+
+		values, ok := args.([]RESPdata)
+		if !ok {
+			return "", fmt.Errorf("Invalid parameter for echo")
+		}
 		var sb strings.Builder
 
-		if len(args) > 0 {
-			if len(args) > 1 {
-				sb.WriteString(fmt.Sprintf("*%d", len(args)))
+		if len(values) > 0 {
+			if len(values) > 1 {
+				sb.WriteString(fmt.Sprintf("*%d", len(values)))
 				sb.WriteString("\r\n")
 			}
-			for _, v := range args {
-				if strings.Contains(v.dataType, "$") {
-					sb.WriteString("+")
-				} else {
-					sb.WriteString(v.dataType)
-					sb.WriteString("\r\n")
-				}
-				sb.WriteString(v.dataContent)
-				sb.WriteString("\r\n")
+			for _, v := range values {
+				sb.WriteString(v.toRESPString())
 			}
-			return sb.String()
+			return sb.String(), nil
 		}
-		return ""
+		return "", nil
+	},
+	"set": func(args any) (string, error) {
+		values, ok := args.([]RESPdata)
+		if !ok {
+			return "", fmt.Errorf("invalid parameter for set")
+		}
+		if len(values) > 1 {
+			storageMap[values[0].dataContent] = values[1]
+			return okRESPString, nil
+		} else if len(values) == 1 {
+			storageMap[values[0].dataContent] = RESPdata{}
+			return okRESPString, nil
+		} else {
+			return "", fmt.Errorf("no key given")
+		}
+	},
+	"get": func(args any) (string, error) {
+		values, ok := args.([]RESPdata)
+		if !ok {
+			return "", fmt.Errorf("invalid parameter for get")
+		}
+		if len(values) > 1 {
+			return "", fmt.Errorf("insert one key")
+		} else if len(values) == 1 {
+			if val, ok := storageMap[values[0].dataContent]; ok {
+				return val.toRESPString(), nil
+			}
+			return nullRESPBulkString, nil
+		} else {
+			return "", fmt.Errorf("no key given")
+		}
 	},
 }
+
+const okRESPString = "+OK\r\n"
+const nullRESPBulkString = "$-1\r\n"
+
+var storageMap map[string]RESPdata = map[string]RESPdata{}
 
 // Ensures gofmt doesn't remove the "net" and "os" imports in stage 1 (feel free to remove this!)
 var _ = net.Listen
@@ -140,7 +187,10 @@ func processData(data string) (stringResponse string, close bool, err error) {
 		for _, content := range dataContents {
 			// check for command
 			if val, ok := knownCommand[strings.ToLower(content.dataContent)]; ok {
-				returnedString = val(dataContents[1:])
+				returnedString, err = val(dataContents[1:])
+				if err != nil {
+					return fmt.Sprintf("-ERR executing command: %s\r\n", err), false, nil
+				}
 				return returnedString, false, nil
 			}
 		}
