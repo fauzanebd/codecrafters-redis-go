@@ -25,7 +25,7 @@ func main() {
 
 	id := 0
 	for {
-		fmt.Println("nunggu ada yang nyambung ke gw")
+		fmt.Println("waiting for connection...")
 		conn, err := l.Accept()
 
 		if err != nil {
@@ -43,6 +43,7 @@ func main() {
 func handleConnection(conn net.Conn, goId int) {
 
 	buffer := make([]byte, 1024)
+	defer conn.Close()
 
 	for {
 		n, err := conn.Read(buffer)
@@ -61,15 +62,15 @@ func handleConnection(conn net.Conn, goId int) {
 
 		_, err = conn.Write([]byte(response))
 		if closeConn {
-			conn.Close()
+			return
 		}
 
 		if err != nil {
 			fmt.Println(wrapGoroutineLogs("Error writing response ", goId, err.Error()))
 			return
-		} else {
-			return
 		}
+		// if no error, we gonna read the same conn in the next loop
+		fmt.Println(wrapGoroutineLogs("continue to next read", goId))
 
 	}
 }
@@ -87,10 +88,10 @@ func processData(data string) (stringResponse string, close bool, err error) {
 	case "*2\r\n$7\r\nCOMMAND\r\n$4\r\nDOCS\r\n":
 		return "", true, nil
 	case "*1\r\n$4\r\nping\r\n":
-		return "+PONG\r\n", true, nil
+		return "+PONG\r\n", false, nil
 	case "*1\r\n$4\r\nPING\r\n":
-		return "+PONG\r\n", true, nil
+		return "+PONG\r\n", false, nil
 	default:
-		return "", true, nil
+		return "+\r\n", false, nil
 	}
 }
