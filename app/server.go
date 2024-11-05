@@ -4,7 +4,44 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 )
+
+type RESPdata struct {
+	dataContent string
+	dataType    string
+}
+
+type commandFn func([]RESPdata) string
+
+var knownCommand map[string]commandFn = map[string]commandFn{
+	"hello": func(args []RESPdata) string {
+		return "Hello, world!"
+	},
+	"echo": func(args []RESPdata) string {
+		var sb strings.Builder
+
+		if len(args) > 0 {
+			if len(args) > 1 {
+				sb.WriteString(fmt.Sprintf("*%d", len(args)))
+				sb.WriteString("\r\n")
+			}
+			for _, v := range args {
+				if strings.Contains(v.dataType, "$") {
+					sb.WriteString("+")
+				} else {
+					sb.WriteString(v.dataType)
+					sb.WriteString("\r\n")
+				}
+				sb.WriteString(v.dataContent)
+				sb.WriteString("\r\n")
+			}
+			return sb.String()
+		}
+		return ""
+	},
+}
 
 // Ensures gofmt doesn't remove the "net" and "os" imports in stage 1 (feel free to remove this!)
 var _ = net.Listen
@@ -36,7 +73,7 @@ func main() {
 		}
 		id++
 		fmt.Printf("Imma let goroutine %d handle this %s connection\n", id, conn.RemoteAddr())
-		go handleConnection(conn, id)
+		handleConnection(conn, id)
 	}
 }
 
@@ -84,6 +121,12 @@ func wrapGoroutineLogs(text string, goId int, a ...any) string {
 
 func processData(data string) (stringResponse string, close bool, err error) {
 
+	dataContents, err := simpleRESPParser(data)
+
+	if err != nil {
+		return fmt.Sprintf("-ERR failed to parse %s", err.Error()), false, nil
+	}
+
 	switch data {
 	case "*2\r\n$7\r\nCOMMAND\r\n$4\r\nDOCS\r\n":
 		return "", true, nil
@@ -92,6 +135,36 @@ func processData(data string) (stringResponse string, close bool, err error) {
 	case "*1\r\n$4\r\nPING\r\n":
 		return "+PONG\r\n", false, nil
 	default:
-		return "+\r\n", false, nil
+		returnedString := ""
+
+		for _, content := range dataContents {
+			// check for command
+			if val, ok := knownCommand[strings.ToLower(content.dataContent)]; ok {
+				returnedString = val(dataContents[1:])
+				break
+			}
+		}
+		return returnedString, false, nil
 	}
+}
+
+func simpleRESPParser(respString string) ([]RESPdata, error) {
+	if len(respString) == 0 {
+		return nil, fmt.Errorf("got nothing")
+	}
+	respSplitted := strings.Split(respString, "\r\n")
+	arrLength, err := strconv.Atoi(string(respSplitted[0][1]))
+	if err != nil {
+		return nil, fmt.Errorf("error converting array length from RESP string")
+	}
+	data := []RESPdata{}
+	for i := 0; i < arrLength; i++ {
+		dataType := respSplitted[1+(2*i)]
+		dataContent := respSplitted[2+(2*i)]
+		data = append(data, RESPdata{
+			dataContent: dataContent,
+			dataType:    dataType,
+		})
+	}
+	return data, nil
 }
