@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type RESPdata struct {
@@ -36,7 +37,7 @@ var knownCommand map[string]commandFn = map[string]commandFn{
 
 		values, ok := args.([]RESPdata)
 		if !ok {
-			return "", fmt.Errorf("Invalid parameter for echo")
+			return "", fmt.Errorf("invalid parameter for echo")
 		}
 		var sb strings.Builder
 
@@ -59,6 +60,22 @@ var knownCommand map[string]commandFn = map[string]commandFn{
 		}
 		if len(values) > 1 {
 			storageMap[values[0].dataContent] = values[1]
+			if len(values) == 4 {
+				if strings.ToLower(values[2].dataContent) == "px" {
+					expiryMS, err := strconv.Atoi(values[3].dataContent)
+					if err != nil {
+						return "", fmt.Errorf("wrong parameter for expiry")
+					}
+					go func() {
+						time.Sleep(time.Duration(expiryMS) * time.Millisecond)
+						delete(storageMap, values[0].dataContent)
+					}()
+				}
+			} else if len(values) == 3 {
+				return "", fmt.Errorf("cant separate value with space")
+			} else if len(values) > 4 {
+				return "", fmt.Errorf("unhandled parameters")
+			}
 			return okRESPString, nil
 		} else if len(values) == 1 {
 			storageMap[values[0].dataContent] = RESPdata{}
