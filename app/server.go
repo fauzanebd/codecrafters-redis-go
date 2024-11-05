@@ -21,9 +21,76 @@ func main() {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
 	}
-	_, err = l.Accept()
-	if err != nil {
-		fmt.Println("Error accepting connection: ", err.Error())
-		os.Exit(1)
+	defer l.Close()
+
+	id := 0
+	for {
+		fmt.Println("nunggu ada yang nyambung ke gw")
+		conn, err := l.Accept()
+
+		if err != nil {
+			fmt.Println("Error accepting connection: ", err.Error())
+			os.Exit(1)
+		} else {
+			fmt.Println("Accepting new connection: ", conn.RemoteAddr())
+		}
+		id++
+		fmt.Printf("Imma let goroutine %d handle this %s connection\n", id, conn.RemoteAddr())
+		go handleConnection(conn, id)
+	}
+}
+
+func handleConnection(conn net.Conn, goId int) {
+
+	buffer := make([]byte, 1024)
+
+	for {
+		n, err := conn.Read(buffer)
+		if err != nil {
+			fmt.Println(wrapGoroutineLogs("error reading data from connection: ", goId, err.Error()))
+			return
+		}
+		data := string(buffer[:n])
+		fmt.Println(wrapGoroutineLogs(fmt.Sprintf("received: %q\n", data), goId))
+		response, closeConn, err := processData(data)
+		if err != nil {
+			fmt.Println(wrapGoroutineLogs("error creating response according to request", goId, err.Error()))
+			return
+		}
+		fmt.Println(wrapGoroutineLogs(fmt.Sprintf("response: %q, closeAfter: %t", response, closeConn), goId))
+
+		_, err = conn.Write([]byte(response))
+		if closeConn {
+			conn.Close()
+		}
+
+		if err != nil {
+			fmt.Println(wrapGoroutineLogs("Error writing response ", goId, err.Error()))
+			return
+		} else {
+			return
+		}
+
+	}
+}
+
+func wrapGoroutineLogs(text string, goId int, a ...any) string {
+	if len(a) == 0 {
+		return fmt.Sprintf("[goroutine %d] -- %s", goId, text)
+	}
+	return fmt.Sprintf("[goroutine %d] -- %s%v", goId, text, a[0])
+}
+
+func processData(data string) (stringResponse string, close bool, err error) {
+
+	switch data {
+	case "*2\r\n$7\r\nCOMMAND\r\n$4\r\nDOCS\r\n":
+		return "", true, nil
+	case "*1\r\n$4\r\nping\r\n":
+		return "+PONG\r\n", true, nil
+	case "*1\r\n$4\r\nPING\r\n":
+		return "+PONG\r\n", true, nil
+	default:
+		return "", true, nil
 	}
 }
