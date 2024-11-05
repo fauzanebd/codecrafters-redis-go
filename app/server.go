@@ -73,7 +73,7 @@ func main() {
 		}
 		id++
 		fmt.Printf("Imma let goroutine %d handle this %s connection\n", id, conn.RemoteAddr())
-		handleConnection(conn, id)
+		go handleConnection(conn, id)
 	}
 }
 
@@ -141,10 +141,10 @@ func processData(data string) (stringResponse string, close bool, err error) {
 			// check for command
 			if val, ok := knownCommand[strings.ToLower(content.dataContent)]; ok {
 				returnedString = val(dataContents[1:])
-				break
+				return returnedString, false, nil
 			}
 		}
-		return returnedString, false, nil
+		return fmt.Sprintf("-ERR unknown command %s\r\n", dataContents[0].dataContent), false, nil
 	}
 }
 
