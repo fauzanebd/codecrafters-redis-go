@@ -5,8 +5,58 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 )
+
+type RESPdata struct {
+	dataContent string
+	dataType    string
+}
+
+type decoderState struct {
+	dataToDecode []byte
+	scanner      *bufio.Scanner
+	typeToDecode byte
+	typeLength   int
+	offset       int
+}
+
+const (
+	RESP_simple_string    = '+'
+	RESP_simple_error     = '-'
+	RESP_integer          = ':'
+	RESP_bulk_string      = '$'
+	RESP_array            = '*'
+	RESP_null             = '_'
+	RESP_boolean          = '#'
+	RESP_doubles          = ','
+	RESP_bignum           = '('
+	RESP_bulk_errors      = '!'
+	RESP_verbatim_strings = '='
+	RESP_map              = '%'
+	RESP_attribute        = '`'
+	RESP_set              = '~'
+	RESP_push             = '>'
+)
+
+func (d *decoderState) scanNext() bool {
+	// wrapper to scanner.Scan() calls.
+	// need to update offset value every time scanner.Scan() called
+
+	moreLinesExist := d.scanner.Scan()
+	d.offset = len(d.scanner.Bytes()) + 2 + 1 // bytes read + CRLF + first unread index
+	return moreLinesExist
+}
+
+func newDecoderState(dataToDecode []byte) *decoderState {
+	scanner := bufio.NewScanner(bytes.NewReader(dataToDecode))
+	scanner.Split(ScanCRLF)
+	return &decoderState{
+		dataToDecode: dataToDecode,
+		scanner:      scanner,
+	}
+}
 
 func Marshal(v any) (string, error) {
 
@@ -19,35 +69,142 @@ func Marshal(v any) (string, error) {
 
 func Unmarshal(data []byte, v any) error {
 
+	if len(data) < 2 {
+		return fmt.Errorf("unknown RESP protocol: %s", string(data))
+	}
+
+	ds := newDecoderState(data)
+	err := ds.unpack(v)
+	if err != nil {
+		return fmt.Errorf("error unpacking values: %s", err.Error())
+	}
+
+	return nil
+}
+
+func (d *decoderState) unpack(v any) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Ptr || rv.IsNil() {
 		return fmt.Errorf("error decoding RESP data: got %s. nil: %t", reflect.TypeOf(v).Kind(), rv.IsNil())
 	}
 
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Split(ScanCRLF)
-
-	switch data[0] {
-	case '*':
-		// * - array/slice
-		for scanner.Scan() {
-			fmt.Println("got: ", scanner.Text())
+	if d.scanNext() {
+		bytesContent := d.scanner.Bytes()
+		// switch on type
+		switch bytesContent[0] {
+		case RESP_array:
+			err := d.unpackArray(v)
+			if err != nil {
+				return fmt.Errorf("error decoding array: %s", err)
+			}
+			return nil
+		case RESP_simple_string:
+			rve := rv.Elem()
+			if rve.Kind() != reflect.String {
+				return fmt.Errorf("cant use this pointer: %s. it's element's type is %s. expected type: %s", v, rve.Type().String(), reflect.String.String())
+			}
+			if !rve.CanSet() {
+				return fmt.Errorf("cannot change element %s pointer referred to", v)
+			}
+			rv.Elem().SetString(string(bytesContent[1:]))
+		case RESP_bulk_string:
+			_, err := strconv.Atoi(string(bytesContent[1:]))
+			if err != nil {
+				return fmt.Errorf("cannot get bulk string length from %s: %s", string(bytesContent[1:]), err)
+			}
+			// scan to next CRLF
+			d.scanNext()
+			strContent := d.scanner.Bytes()
+			rve := rv.Elem()
+			if rve.Kind() != reflect.String {
+				return fmt.Errorf("cant use this pointer: %s. it's element's type is %s. expected type: %s", v, rve.Type().String(), reflect.String.String())
+			}
+			if !rve.CanSet() {
+				return fmt.Errorf("cannot change element %s pointer referred to", v)
+			}
+			rv.Elem().SetString(string(strContent))
+		case RESP_integer:
+			d.scanNext()
+			intContent, err := strconv.Atoi(string(d.scanner.Bytes()))
+			if err != nil {
+				return fmt.Errorf("cant convert %s to integer: %s", string(d.scanner.Bytes()), err)
+			}
+			rve := rv.Elem()
+			if rve.Kind() != reflect.Int {
+				return fmt.Errorf("cant use this pointer: %s. it's element's type is %s. expected type: %s", v, rve.Type().String(), reflect.Int.String())
+			}
+			if !rve.CanSet() {
+				return fmt.Errorf("cannot change element %s pointer referred to", v)
+			}
+			rv.Elem().SetInt(int64(intContent))
 		}
+		return nil
+	}
 
-	case '+':
-		// + - simple string
-	case '$':
-		// $ - bulk string
-	case '%':
-		// % - map
-	case ',':
-		// , - float
-	case ':':
-		// : - int
+	return nil
+}
+
+func (d *decoderState) unpackArray(v any) error {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return fmt.Errorf("error decoding RESP data: got %s. nil: %t", reflect.TypeOf(v).Kind(), rv.IsNil())
+	}q
+	arrElementType := []byte{}
+	for i := d.offset; i < len(d.dataToDecode); i++ {
+		// read until CRLF
+		if d.dataToDecode[i] == '\r' && d.dataToDecode[i+1] == '\n' {
+			break
+		}
+		arrElementType = append(arrElementType, d.dataToDecode[i])
+	}
+	arrLength, err := strconv.Atoi(string(arrElementType[1:]))
+	if err != nil {
+		return fmt.Errorf("cant get array length from %s: %s", string(arrElementType), err.Error())
+	}
+
+	rve := rv.Elem()
+	rve.Grow(arrLength)
+
+	switch arrElementType[0] {
+	case RESP_simple_string:
+		// loop through elements
+		for i := 0; i < arrLength; i++ {
+			elem := rve.Index(i)
+			d.unpack(elem.Addr().Interface().(*string))
+		}
+	case RESP_bulk_string:
+		for i := 0; i < arrLength; i++ {
+			elem := rve.Index(i)
+			d.unpack(elem.Addr().Interface().(*string))
+		}
+	case RESP_integer:
+		for i := 0; i < arrLength; i++ {
+			elem := rve.Index(i)
+			d.unpack(elem.Addr().Interface().(*string))
+		}
 	}
 
 	return nil
 
+}
+
+func UnmarshalConcrete(data []byte, v any) error {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return fmt.Errorf("error decoding RESP data: got %s. nil: %t", reflect.TypeOf(v).Kind(), rv.IsNil())
+	}
+
+	switch data[0] {
+	case '+':
+		// to simple string
+	case '$':
+		// to bulk string
+	case ',':
+		// to float
+	case ':':
+		// to int
+	}
+	return nil
 }
 
 func dropCR(data []byte) []byte {

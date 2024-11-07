@@ -22,9 +22,9 @@ func main() {
 	// 	return
 	// }
 	// fmt.Printf("%q\n", res)
-
-	var skibidi = &[]any{}
-	err := resp.Unmarshal([]byte("*2\r\n$4\r\necho\r\n$3\r\nhey\r\n"), skibidi)
+	var unknown any
+	var skibidi *any = &unknown
+	err := resp.Unmarshal([]byte("*2\r\n$4\r\necho\r\n$3\r\nhey\r\n"), skibidi, nil)
 	if err != nil {
 		fmt.Println("error unmarshal: ", err)
 		return

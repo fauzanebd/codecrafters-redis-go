@@ -14,7 +14,6 @@ type RESPdata struct {
 }
 
 func (data RESPdata) toRESPString() string {
-	
 
 	var sb strings.Builder
 	if strings.Contains(data.dataType, "$") {
