@@ -9,11 +9,6 @@ import (
 	"strings"
 )
 
-type RESPdata struct {
-	dataContent string
-	dataType    string
-}
-
 type decoderState struct {
 	dataToDecode []byte
 	scanner      *bufio.Scanner
@@ -45,7 +40,7 @@ func (d *decoderState) scanNext() bool {
 	// need to update offset value every time scanner.Scan() called
 
 	moreLinesExist := d.scanner.Scan()
-	d.offset = len(d.scanner.Bytes()) + 2 + 1 // bytes read + CRLF + first unread index
+	d.offset = len(d.scanner.Bytes()) + 2 // bytes read + CRLF + first unread index
 	return moreLinesExist
 }
 
@@ -63,7 +58,7 @@ func Marshal(v any) (string, error) {
 	// var sb strings.Builder
 	// get data type
 	reflectValue := reflect.ValueOf(v)
-	fmt.Println("tipe var: ", reflectValue.Type())
+
 	return reflectValueToRESP(reflectValue, false)
 }
 
@@ -93,7 +88,12 @@ func (d *decoderState) unpack(v any) error {
 		// switch on type
 		switch bytesContent[0] {
 		case RESP_array:
-			err := d.unpackArray(v)
+			res, err := strconv.Atoi(string(bytesContent[1:]))
+			d.typeLength = res
+			if err != nil {
+				return fmt.Errorf("cannot get array length from %s", bytesContent)
+			}
+			err = d.unpackArray(v)
 			if err != nil {
 				return fmt.Errorf("error decoding array: %s", err)
 			}
@@ -148,7 +148,7 @@ func (d *decoderState) unpackArray(v any) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Ptr || rv.IsNil() {
 		return fmt.Errorf("error decoding RESP data: got %s. nil: %t", reflect.TypeOf(v).Kind(), rv.IsNil())
-	}q
+	}
 	arrElementType := []byte{}
 	for i := d.offset; i < len(d.dataToDecode); i++ {
 		// read until CRLF
@@ -157,54 +157,34 @@ func (d *decoderState) unpackArray(v any) error {
 		}
 		arrElementType = append(arrElementType, d.dataToDecode[i])
 	}
-	arrLength, err := strconv.Atoi(string(arrElementType[1:]))
-	if err != nil {
-		return fmt.Errorf("cant get array length from %s: %s", string(arrElementType), err.Error())
-	}
 
 	rve := rv.Elem()
-	rve.Grow(arrLength)
+	rve.Grow(d.typeLength)
 
 	switch arrElementType[0] {
 	case RESP_simple_string:
+		rve.Set(reflect.ValueOf(make([]string, d.typeLength)))
 		// loop through elements
-		for i := 0; i < arrLength; i++ {
+		for i := 0; i < d.typeLength; i++ {
 			elem := rve.Index(i)
 			d.unpack(elem.Addr().Interface().(*string))
 		}
 	case RESP_bulk_string:
-		for i := 0; i < arrLength; i++ {
+		rve.Set(reflect.ValueOf(make([]string, d.typeLength)))
+		for i := 0; i < d.typeLength; i++ {
 			elem := rve.Index(i)
 			d.unpack(elem.Addr().Interface().(*string))
 		}
 	case RESP_integer:
-		for i := 0; i < arrLength; i++ {
+		rve.Set(reflect.ValueOf(make([]int, d.typeLength)))
+		for i := 0; i < d.typeLength; i++ {
 			elem := rve.Index(i)
-			d.unpack(elem.Addr().Interface().(*string))
+			d.unpack(elem.Addr().Interface().(*int))
 		}
 	}
 
 	return nil
 
-}
-
-func UnmarshalConcrete(data []byte, v any) error {
-	rv := reflect.ValueOf(v)
-	if rv.Kind() != reflect.Ptr || rv.IsNil() {
-		return fmt.Errorf("error decoding RESP data: got %s. nil: %t", reflect.TypeOf(v).Kind(), rv.IsNil())
-	}
-
-	switch data[0] {
-	case '+':
-		// to simple string
-	case '$':
-		// to bulk string
-	case ',':
-		// to float
-	case ':':
-		// to int
-	}
-	return nil
 }
 
 func dropCR(data []byte) []byte {

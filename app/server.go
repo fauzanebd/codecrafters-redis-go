@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	resp "github.com/codecrafters-io/redis-starter-go/parser"
+	resp "github.com/codecrafters-io/redis-starter-go/resp"
 )
 
 // Ensures gofmt doesn't remove the "net" and "os" imports in stage 1 (feel free to remove this!)
@@ -15,31 +15,14 @@ var _ = os.Exit
 
 func main() {
 
-	// res, err := resp.Marshal([]int{23, 43, 45, 54})
-	// res, err := resp.Marshal([]float64{34.54, 21.454})
-	// if err != nil {
-	// 	fmt.Println("error: ", err.Error())
-	// 	return
-	// }
-	// fmt.Printf("%q\n", res)
-	var unknown any
-	var skibidi *any = &unknown
-	err := resp.Unmarshal([]byte("*2\r\n$4\r\necho\r\n$3\r\nhey\r\n"), skibidi, nil)
-	if err != nil {
-		fmt.Println("error unmarshal: ", err)
-		return
-	}
-	fmt.Println("yeay succeed, res: ", skibidi)
-
-	return
 	// get cli args
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 
 		if len(args[i]) > 3 {
 			// if args starts with --
-			if args[i][0] == 45 && args[i][1] == 45 {
-				err := WriteConfig(args[i][2:], args[i+1])
+			if args[i][0] == '-' && args[i][1] == '-' {
+				err := resp.WriteConfig(args[i][2:], args[i+1])
 				if err != nil {
 					panic(err)
 				}
@@ -86,9 +69,9 @@ func handleConnection(conn net.Conn, goId int) {
 			fmt.Println(wrapGoroutineLogs("error reading data from connection: ", goId, err.Error()))
 			return
 		}
-		data := string(buffer[:n])
-		fmt.Println(wrapGoroutineLogs(fmt.Sprintf("received: %q\n", data), goId))
-		response, closeConn, err := processConn(data)
+
+		fmt.Println(wrapGoroutineLogs(fmt.Sprintf("received: %q\n", string(buffer[:n])), goId))
+		response, closeConn, err := processConn(buffer[:n])
 		if err != nil {
 			fmt.Println(wrapGoroutineLogs("error creating response according to request", goId, err.Error()))
 			return
@@ -117,34 +100,26 @@ func wrapGoroutineLogs(text string, goId int, a ...any) string {
 	return fmt.Sprintf("[goroutine %d] -- %s%v", goId, text, a[0])
 }
 
-func processConn(data string) (stringResponse string, close bool, err error) {
+func processConn(data []byte) (stringResponse string, close bool, err error) {
 
-	dataContents, err := simpleRESPParser(data)
+	contentsPtr := &[]string{}
+	err = resp.Unmarshal(data, contentsPtr)
+	contents := *contentsPtr
 
 	if err != nil {
 		return fmt.Sprintf("-ERR failed to parse %s", err.Error()), false, nil
 	}
 
-	switch data {
-	case "*2\r\n$7\r\nCOMMAND\r\n$4\r\nDOCS\r\n":
-		return "", true, nil
-	case "*1\r\n$4\r\nping\r\n":
-		return "+PONG\r\n", false, nil
-	case "*1\r\n$4\r\nPING\r\n":
-		return "+PONG\r\n", false, nil
-	default:
-		returnedString := ""
-
-		for _, content := range dataContents {
-			// check for command
-			if val, ok := knownCommand[strings.ToLower(content.dataContent)]; ok {
-				returnedString, err = val(dataContents[1:])
-				if err != nil {
-					return fmt.Sprintf("-ERR executing command: %s\r\n", err), false, nil
-				}
-				return returnedString, false, nil
+	returnedString := ""
+	for _, content := range contents {
+		if val, ok := resp.KnownCommand[strings.ToLower(content)]; ok {
+			returnedString, err = val(contents[1:])
+			if err != nil {
+				return fmt.Sprintf("-ERR executing command: %s\r\n", err), false, nil
 			}
+			return returnedString, false, nil
 		}
-		return fmt.Sprintf("-ERR unknown command %s\r\n", dataContents[0].dataContent), false, nil
 	}
+	return fmt.Sprintf("-ERR unknown command %s\r\n", contents[0]), false, nil
+
 }
